@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { compactTranscript, createTranscriptReader, transcriptState } from '../lib/transcript.ts'
+import { compactTranscript, transcriptState } from '../lib/transcript.ts'
 import { replayEvents, shouldAcceptSessionEvent } from '../components/chat-state.ts'
 
 const view = { artifactRevision: 0 }
@@ -44,26 +44,6 @@ test('text deltas preserve mounted message keys and old events cannot duplicate 
   assert.equal(shouldAcceptSessionEvent('chat', 'chat', events[5], seen, 5), true)
 })
 
-test('a warm reader processes only the tail; a checkpoint write failure preserves the transcript', async () => {
-  let previous = null
-  let tail = events
-  const offsets = []
-  const read = createTranscriptReader({
-    async read() { offsets.push(previous?.lastSeq ?? 0); return { previous, events: tail, view, summary: null } },
-    async publish(_, snapshot) { previous = snapshot },
-  })
-  await read('chat')
-  tail = [{ type: 'user', id: 2, seq: 11, text: 'Again' }]
-  const next = await read('chat')
-  assert.deepEqual(offsets, [0, 10])
-  assert.equal(next.transcript.entries.at(-1).text, 'Again')
-  const failing = createTranscriptReader({
-    async read() { return { previous: null, events, view, summary: null } },
-    async publish() { throw new Error('Redis write unavailable') },
-  })
-  assert.deepEqual((await failing('chat')).transcript, compactTranscript(events, view))
-})
-
 test('a long response compacts thousands of deltas into one message', () => {
   const journal = [{ type: 'turn_start', seq: 1, id: 1, turnId: 1 },
     ...Array.from({ length: 10000 }, (_, i) => ({ type: 'text', seq: i + 2, turnId: 1, delta: 'x' }))]
@@ -71,16 +51,4 @@ test('a long response compacts thousands of deltas into one message', () => {
   assert.equal(snapshot.entries.length, 1)
   assert.equal(snapshot.entries[0].text.length, 10000)
   assert.ok(JSON.stringify(snapshot).length < JSON.stringify(journal).length / 20)
-})
-
-test('a page may publish its checkpoint after responding without delaying the transcript', async () => {
-  let job, published = false
-  const read = createTranscriptReader({
-    async read() { return { previous: null, events, view, summary: null } },
-    async publish() { published = true },
-  })
-  assert.equal((await read('chat', (publish) => { job = publish })).transcript.lastSeq, 10)
-  assert.equal(published, false)
-  await job()
-  assert.equal(published, true)
 })

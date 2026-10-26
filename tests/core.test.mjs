@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { urlChat } from '../lib/session-id.ts'
-import './runtime.test.mjs'
 import {
   DESIGN_ARTIFACT_EMBEDDED_CSP,
   designFrameHtml,
@@ -25,8 +24,7 @@ import {
   upsertSession,
   waitingLabel,
 } from '../components/chat-state.ts'
-import { createTools } from '../lib/tools.ts'
-import { featuredModels } from '../lib/featured-models.ts'
+import { readFileSync } from 'node:fs'
 import { designLinkUrl, MAX_DESIGN_LINK_LENGTH } from '../lib/design-link.ts'
 
 test('a design may only ask to open a whole https address, shown in full before it opens', () => {
@@ -45,21 +43,6 @@ test('a design may only ask to open a whole https address, shown in full before 
   const spaced = `https://example.com/?q=a${' '.repeat(1000)}b`
   assert.ok(spaced.length <= MAX_DESIGN_LINK_LENGTH && new URL(spaced).href.length > MAX_DESIGN_LINK_LENGTH)
   assert.equal(designLinkUrl(spaced), null)
-})
-import { readdirSync, readFileSync } from 'node:fs'
-
-test('the libfx wake route stays private, so only Vercel Queues can deliver to it', () => {
-  // A function with a queue trigger has no public URL on Vercel. Its handler acts on
-  // the delivery it is handed: the bundled queue client runs libfx before the broker
-  // confirms the receipt. So the trigger is what keeps forged deliveries out.
-  const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
-  const triggers = config.functions?.['app/api/libfx/route.ts']?.experimentalTriggers ?? []
-  assert.deepEqual(triggers.map(({ type, topic }) => ({ type, topic })), [{ type: 'queue/v2beta', topic: '__libfx_wkf_workflow_session' }])
-  // No other route serves the wake handler, since one without the trigger would be public.
-  const routes = readdirSync(new URL('../app', import.meta.url), { recursive: true })
-    .filter((path) => /(^|\/)route\.tsx?$/.test(path))
-  const serving = routes.filter((path) => readFileSync(new URL(`../app/${path}`, import.meta.url), 'utf8').includes('wakeHandler('))
-  assert.deepEqual(serving, ['api/libfx/route.ts'])
 })
 import { DESIGN_MD_CATALOG, DESIGN_MD_MAX_BYTES, parseDesignMdRequest } from '../lib/design-md.ts'
 
@@ -87,46 +70,6 @@ function assertInvalid(html, expectedError) {
 function documentWith(body, head = '') {
   return `<!doctype html><html><head>${head}</head><body>${body}</body></html>`
 }
-
-test('the featured models are the newest of each featured family, in that order', () => {
-  const featured = featuredModels([
-    { id: 'alibaba/qwen-3-14b', released: 9 },
-    { id: 'anthropic/claude-opus-5', released: 1 },
-    { id: 'anthropic/claude-opus-5.5', released: 2 },
-    { id: 'anthropic/claude-opus-5.5-fast', released: 2 },
-    { id: 'anthropic/claude-sonnet-5', released: 3 },
-    { id: 'openai/gpt-6.1-sol', released: 5 },
-    { id: 'openai/gpt-6.2-mini', released: 6 },
-    { id: 'deepseek/deepseek-v4-flash', released: 4 },
-    { id: 'deepseek/deepseek-v4-pro', released: 4 },
-  ])
-  // A family's order, not the catalog's; minis, Sonnet, Qwen and "-fast" twins never lead.
-  assert.deepEqual(featured, ['openai/gpt-6.1-sol', 'anthropic/claude-opus-5.5', 'deepseek/deepseek-v4-pro'])
-})
-
-test('design mode exposes only design and common host tools', async () => {
-  const host = toolHost()
-  const tools = createTools(host)
-  assert.deepEqual(
-    tools.map((tool) => tool.name),
-    [
-      'read_design',
-      'publish_design',
-      'edit_design',
-      'web_fetch',
-      'ask_user_question',
-      'read_tool_result',
-      'capability_search',
-      'subagent',
-    ],
-  )
-  const signal = new AbortController().signal
-  await tools.find((tool) => tool.name === 'read_design').execute({}, { signal })
-  await tools.find((tool) => tool.name === 'edit_design').execute(
-    { edits: [{ old_string: 'black', new_string: 'blue' }, { old_string: 'Old', new_string: 'New' }] },
-    { signal },
-  )
-})
 
 test('turn events update an existing sidebar session without mutating it', () => {
   const current = [{ id: 'chat', title: 'Landing page', createdAt: 10, lastActivity: 10, busy: false }]
@@ -862,4 +805,22 @@ test('a page URL opens a chat only when its s names one, by the first paint\'s r
   for (const search of ['?s=', '?s=Chat-A', '?s=..%2Fchat', `?s=${'a'.repeat(41)}`]) {
     assert.deepEqual(urlChat(search), { kind: 'invalid' }, search)
   }
+})
+
+test('the actor stops a turn at its 65th model step with fx0\'s step-limit message', async () => {
+  const { MAX_TURN_MODEL_STEPS, STEP_LIMIT, stepLimitedFetch } = await import('../actor/turn-budget.ts')
+  const sent = []
+  const limited = stepLimitedFetch(async (input) => { sent.push(input); return new Response('ok') })
+  const url = 'https://ai-gateway.vercel.sh/v3/ai/language-model'
+  const turn = (assistants) => new TextEncoder().encode(JSON.stringify({
+    prompt: [{ role: 'assistant' }, { role: 'user' }, ...Array.from({ length: assistants }, () => ({ role: 'assistant' }))],
+  }))
+  assert.equal(MAX_TURN_MODEL_STEPS, 64)
+  assert.equal(await (await limited(url, { method: 'POST', body: turn(63) })).text(), 'ok')
+  const stopped = await limited(url, { method: 'POST', body: turn(64) })
+  assert.equal(stopped.status, 400)
+  assert.deepEqual(await stopped.json(), { error: { message: 'Turn stopped after 64 model steps. Send a message to continue.' } })
+  assert.equal(STEP_LIMIT, 'Turn stopped after 64 model steps. Send a message to continue.')
+  assert.equal(await (await limited('https://ai-gateway.vercel.sh/v1/models', { method: 'GET' })).text(), 'ok')
+  assert.deepEqual(sent, [url, 'https://ai-gateway.vercel.sh/v1/models'])
 })

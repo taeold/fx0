@@ -5,7 +5,6 @@ import dns from 'node:dns/promises'
 import { Readable } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { isPublicAddress, publicDestination, fetchPublicText, MAX_FETCH_BYTES } from '../lib/public-fetch.ts'
-import { createTools } from '../lib/tools.ts'
 
 const publicIp = '93.184.216.34'
 const lookup = async () => [{ address: publicIp, family: 4 }]
@@ -79,33 +78,4 @@ test('already cancelled and slow DNS requests cannot open connections', async (t
   await assert.rejects(fetchPublicText('http://example.com', controller.signal))
   t.mock.method(dns, 'lookup', () => new Promise(() => {}))
   await assert.rejects(fetchPublicText('http://example.com', AbortSignal.timeout(10)))
-})
-
-function webFetch() {
-  const host = {
-    reportInvocation: () => 1, storeResult: () => {}, readResult: () => undefined, askUser: async () => ({}),
-    log: () => {}, spawnSubagent: async () => 'done', capabilitySearch: () => [],
-    readDesign: async () => ({ html: null, artifactRevision: 0 }),
-    publishDesign: async () => ({ ok: true, revision: 1, changed: true }),
-    editDesign: async () => ({ ok: true, revision: 2, changed: true }),
-  }
-  const tool = createTools(host).find((candidate) => candidate.name === 'web_fetch')
-  return (url) => tool.execute({ url }, { signal: new AbortController().signal })
-}
-
-test('web_fetch refuses private destinations without opening a connection', async (t) => {
-  // A public-looking name that resolves inside the network, as a rebinding host would.
-  const requests = transport(t, [], async () => [{ address: '10.0.0.5', family: 4 }])
-  const network = t.mock.method(globalThis, 'fetch', async () => { throw new Error('web_fetch must not use an unchecked fetch') })
-  const fetchUrl = webFetch()
-  for (const url of ['http://169.254.169.254/latest/meta-data/', 'http://localhost:3000/api/debug', 'http://[::1]/', 'http://rebind.example/']) {
-    assert.deepEqual(await fetchUrl(url), { error: 'public page fetch failed' }, url)
-  }
-  assert.equal(requests.length, 0)
-  assert.equal(network.mock.callCount(), 0)
-})
-
-test('web_fetch still reads public pages as text', async (t) => {
-  transport(t, [{ statusCode: 200, headers: {}, chunks: [Buffer.from('<html><head><style>p{}</style></head><body><p>Hello <b>there</b></p><script>x()</script></body></html>')] }])
-  assert.deepEqual(await webFetch()('http://example.com/page'), { status: 200, url: 'http://example.com/page', content: 'Hello there' })
 })

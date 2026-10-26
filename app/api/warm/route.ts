@@ -1,16 +1,8 @@
-import { log, warmChat } from '../../../lib/agent'
-import { withSessionRoute } from '../../../lib/route-auth'
+import { validChatId, wakeChat } from '../../../lib/chats'
 
-export const maxDuration = 60
-
-// Called while the user types. The owner check, runtime binding, state hydration and
-// the process's libfx agent happen now, so the send that follows skips them. Best
-// effort: failures stay quiet.
-export const POST = withSessionRoute(async (_request, { host }) => {
-  try {
-    await warmChat(host)
-  } catch {
-    log(host.id, 'warm:skipped', {})
-  }
+// Called while the user types, so the chat's actor is up by the time the message is sent.
+export async function POST(request: Request) {
+  const id = new URL(request.url).searchParams.get('session')
+  if (validChatId(id)) await wakeChat(id).catch(() => {})
   return new Response(null, { status: 204 })
-})
+}

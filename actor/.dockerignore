@@ -1,0 +1,3 @@
+# Dependencies are installed inside the image, not copied from the host.
+node_modules
+tsconfig.json

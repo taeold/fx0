@@ -1,21 +1,15 @@
 import { assetReference, BLANK_IMAGE, rewriteRemoteImages } from '../../../lib/design-artifact'
-import { readDesignAsset } from '../../../lib/design-assets'
-import { readDesignArtifact } from '../../../lib/journal'
-import { readGeneration } from '../../../lib/history'
-import { withSessionRoute } from '../../../lib/route-auth'
-
-export const maxDuration = 30
+import { readDesignAsset, readDesignHtml } from '../../../lib/chats'
 
 const MAX_EXPORT_IMAGE_CHARS = 20 * 1024 * 1024
 
 // A design's own HTML, for copying or saving. It is model-written, so this origin never
 // renders it: plain text, an attachment, and a sandboxing policy. Its scripts run only
 // inside the preview's sandboxed frame.
-export const GET = withSessionRoute(async (request, { id: sessionId, user }) => {
-  // Without a revision this is the live design in Redis; with one, a past version from Neon.
-  const revision = Number(new URL(request.url).searchParams.get('revision'))
-  const past = Number.isSafeInteger(revision) && revision > 0
-  const html = past ? await readGeneration(user.id, sessionId, revision) : await readDesignArtifact(sessionId)
+export async function GET(request: Request) {
+  const params = new URL(request.url).searchParams
+  const session = params.get('session')
+  const { html, past } = await readDesignHtml(session, params.get('revision'))
   if (html == null) {
     return Response.json({ error: past ? 'This version is not in the history.' : 'No design has been published yet.' }, { status: 404 })
   }
@@ -29,7 +23,7 @@ export const GET = withSessionRoute(async (request, { id: sessionId, user }) => 
   })
   const loaded = new Map<string, string>()
   await Promise.all([...handles].map(async (handle) => {
-    const asset = await readDesignAsset(sessionId, handle).catch(() => null)
+    const asset = await readDesignAsset(session!, handle).catch(() => null)
     if (asset) loaded.set(handle, `data:${asset.mimeType};base64,${asset.bytes.toString('base64')}`)
   }))
   let total = 0
@@ -51,4 +45,4 @@ export const GET = withSessionRoute(async (request, { id: sessionId, user }) => 
       'x-content-type-options': 'nosniff',
     },
   })
-})
+}
