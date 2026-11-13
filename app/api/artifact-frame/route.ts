@@ -1,32 +1,14 @@
 import { DESIGN_ARTIFACT_EMBEDDED_CSP, prepareDesignArtifactHtml } from '../../../lib/design-artifact'
-import { readDesignArtifactAt } from '../../../lib/journal'
-import { readGeneration } from '../../../lib/history'
-import { withSessionRoute } from '../../../lib/route-auth'
-import { log } from '../../../lib/session'
+import { readDesignHtml } from '../../../lib/chats'
 
-export const maxDuration = 30
-
-export const GET = withSessionRoute(async (request, { id: sessionId, user }) => {
-  // Without a revision this is the live design in Redis; with one, a past version from Neon.
+export async function GET(request: Request) {
   const params = new URL(request.url).searchParams
-  const revision = Number(params.get('revision'))
-  const past = Number.isSafeInteger(revision) && revision > 0
-  const live = past ? null : await readDesignArtifactAt(sessionId)
-  const artifact = past ? await readGeneration(user.id, sessionId, revision) : live!.html
-  // ?v= names the revision the page expects. When it is the one live, the browser may
-  // keep this response but must revalidate it: this route checks the session first,
-  // so a reload costs a 304 and a signed-out browser gets nothing from its cache.
-  const version = Number(params.get('v'))
-  const cacheable = live?.html != null && Number.isSafeInteger(version) && version > 0 && version === live.revision
-  const etag = cacheable ? `"${sessionId}:${live.revision}"` : null
-  if (etag && request.headers.get('if-none-match') === etag) {
-    return new Response(null, { status: 304, headers: { 'cache-control': 'private, no-cache', etag } })
-  }
+  const { html: artifact, past } = await readDesignHtml(params.get('session'), params.get('revision'))
   const readyToken = crypto.randomUUID()
   const prepared = artifact == null ? null : prepareDesignArtifactHtml(artifact, DESIGN_ARTIFACT_EMBEDDED_CSP, readyToken)
   // Every stored design passed validation, so this only guards against one that
   // somehow lacks a doctype: it is never shown without its CSP.
-  if (artifact != null && prepared == null) log(sessionId, 'artifact:unrenderable', { revision: past ? revision : live!.revision })
+  if (artifact != null && prepared == null) console.error('[fx0] artifact:unrenderable', { session: params.get('session'), revision: params.get('revision') })
   const preparedArtifact = prepared ??
     `<!doctype html><html><head><meta charset="utf-8"><title>No design artifact</title></head><body><p>${
       artifact != null ? 'This design could not be prepared for preview.'
@@ -99,8 +81,7 @@ document.querySelector('#frame-root').append(frame);
   return new Response(html, {
     status: artifact == null ? 404 : 200,
     headers: {
-      'cache-control': etag ? 'private, no-cache' : 'private, no-store',
-      ...(etag ? { etag } : {}),
+      'cache-control': 'private, no-store',
       'content-security-policy': csp,
       'content-type': 'text/html; charset=utf-8',
       'permissions-policy':
@@ -109,4 +90,4 @@ document.querySelector('#frame-root').append(frame);
       'x-content-type-options': 'nosniff',
     },
   })
-})
+}

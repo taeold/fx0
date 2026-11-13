@@ -1,10 +1,5 @@
-import { NextResponse } from 'next/server'
-import { publicUser } from '@/lib/auth'
-import { isAuthenticatedSession } from '@/lib/secure-session'
-import { withRequestSession } from '@/lib/request-session'
+import { LOCAL_USER } from '../../../../lib/local-user'
 
-export const GET = withRequestSession(async (_request, session) => {
-  return NextResponse.json({ user: isAuthenticatedSession(session) ? publicUser(session) : null }, {
-    headers: { 'Cache-Control': 'no-store' },
-  })
-})
+export function GET() {
+  return Response.json({ user: LOCAL_USER })
+}

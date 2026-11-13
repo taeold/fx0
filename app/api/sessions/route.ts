@@ -1,14 +1,13 @@
-import { listOwnedSessions, reserveNewSession, withUserRoute, withChatRoute } from '../../../lib/route-auth'
-import { resolveGrantedTeam } from '../../../lib/auth'
+import { connection } from 'next/server'
+import { listChats } from '../../../lib/chats'
 
-export const maxDuration = 60
+export async function GET() {
+  await connection()
+  return Response.json({ sessions: await listChats(), nextCursor: null, now: Date.now() })
+}
 
-export const GET = withChatRoute(async (request, { user }) => {
-  return Response.json(await listOwnedSessions(user.id, new URL(request.url).searchParams.get('cursor')))
-})
-
-export const POST = withUserRoute(async (_request, { user, session }) => {
-  const { teamId } = await resolveGrantedTeam(session)
-  const id = await reserveNewSession(user, teamId)
+// A new chat is only an id until its first message makes its Drive.
+export async function POST() {
+  const id = crypto.randomUUID()
   return Response.json({ id, sessionId: id }, { status: 201 })
-})
+}

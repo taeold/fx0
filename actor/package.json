@@ -1,0 +1,8 @@
+{
+  "name": "fx0-actor",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "libfx": "0.0.14"
+  }
+}
